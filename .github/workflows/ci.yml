@@ -1,0 +1,68 @@
+name: CI - Mini Inventario
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Validar configuracion de Docker Compose
+        run: docker compose config
+
+      - name: Construir imagen de la API
+        run: docker compose build api
+
+      - name: Arrancar servicios
+        run: docker compose up -d
+
+      - name: Esperar a que MySQL este listo
+        run: |
+          echo "Esperando a MySQL..."
+          for i in $(seq 1 15); do
+            if docker compose exec -T mysql mysqladmin ping -uroot -proot --silent 2>/dev/null; then
+              echo "MySQL listo"
+              break
+            fi
+            echo "Intento $i/15..."
+            sleep 3
+          done
+
+      - name: Verificar health check de la API
+        run: |
+          for i in $(seq 1 10); do
+            STATUS=$(docker compose exec -T api wget -qO- http://localhost:3000/health 2>/dev/null || echo "")
+            if echo "$STATUS" | grep -q "ok"; then
+              echo "API responde correctamente: $STATUS"
+              exit 0
+            fi
+            echo "Esperando API... intento $i/10"
+            sleep 3
+          done
+          echo "La API no respondio a tiempo"
+          docker compose logs api
+          exit 1
+
+      - name: Verificar endpoint GET /productos
+        run: |
+          RESPONSE=$(docker compose exec -T api wget -qO- http://localhost:3000/productos 2>/dev/null)
+          echo "Respuesta: $RESPONSE"
+          if echo "$RESPONSE" | grep -q "Teclado"; then
+            echo "Endpoint /productos funciona correctamente"
+          else
+            echo "Error: /productos no devolvio los datos esperados"
+            exit 1
+          fi
+
+      - name: Apagar servicios
+        if: always()
+        run: docker compose down -v
